@@ -15,7 +15,7 @@ from database import save_minute_data
 class EastMoneyClient:
     """东方财富行情数据客户端"""
     
-    BASE_URL = "https://push2.eastmoney.com"
+    BASE_URL = "https://push2his.eastmoney.com"
     
     def __init__(self):
         self.session = requests.Session()
@@ -211,8 +211,8 @@ class EastMoneyClient:
                 # 指数：f46 是昨日收盘点位
                 result['yesterday_close'] = d.get('f46', 0) / 100 if d.get('f46') else None
             else:
-                # 股票：f46 是昨日收盘价
-                result['yesterday_close'] = d.get('f46', 0) / 100 if d.get('f46') else None
+                # 股票：用历史API获取昨日收盘价
+                result['yesterday_close'] = self._get_yesterday_close(secid)
             
             # 计算涨跌和涨跌幅（用 f43 和 f46 直接计算，避免 f45 字段异常）
             if result['yesterday_close'] and result['yesterday_close'] > 0:

@@ -878,12 +878,21 @@ HTML_TEMPLATE = '''
                                  alert.type === 'volume_surge' ? '📊' :
                                  alert.type === 'continuous_up' ? '📈📈' :
                                  alert.type === 'continuous_down' ? '📉📉' : '🚨';
+                    // 告警类型描述
+                    const typeDesc = {
+                        'price_change': '涨跌幅告警',
+                        'rapid_change': '快速波动',
+                        'volume_surge': '放量告警',
+                        'trend_fit': '趋势拟合',
+                        'continuous_up': '连续上涨',
+                        'continuous_down': '连续下跌'
+                    }[alert.type] || '告警';
                     const todayClass = isToday ? ' today' : '';
                     return '<div class="alert-item ' + severity + todayClass + '">' +
                         '<span class="alert-icon">' + icon + '</span>' +
                         '<div class="alert-info">' +
                         '<div class="alert-msg">' + alert.msg + '</div>' +
-                        '<div class="alert-time">' + alert.time + '</div>' +
+                        '<div class="alert-time">' + alert.alert_time + ' · ' + typeDesc + '</div>' +
                         '</div></div>';
                 }).join('');
             } catch (e) {

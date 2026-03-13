@@ -47,6 +47,8 @@ class AlertChecker:
             if pct >= threshold:
                 alerts_triggered.append({
                     "type": "price_change",
+                    "code": code,
+                    "name": name,
                     "msg": f"{code}{name} 涨跌{pct:.2f}%",
                     "severity": "high"
                 })
@@ -60,6 +62,8 @@ class AlertChecker:
                 direction = "涨" if change > 0 else "跌"
                 alerts_triggered.append({
                     "type": "rapid_change",
+                    "code": code,
+                    "name": name,
                     "msg": f"{code}{name} {minutes}分{direction}{abs(change):.2f}%",
                     "severity": "high"
                 })
@@ -71,6 +75,8 @@ class AlertChecker:
             if surge and surge >= threshold:
                 alerts_triggered.append({
                     "type": "volume_surge",
+                    "code": code,
+                    "name": name,
                     "msg": f"{code}{name} 放量{surge:.1f}%",
                     "severity": "medium"
                 })
@@ -82,6 +88,8 @@ class AlertChecker:
             if trend_result:
                 alerts_triggered.append({
                     "type": "trend_fit",
+                    "code": code,
+                    "name": name,
                     "msg": f"{code}{name} {trend_result}",
                     "severity": "high"
                 })
@@ -198,6 +206,8 @@ class AlertChecker:
                     if all_up:
                         trends.append({
                             "type": "continuous_up",
+                            "code": code,
+                            "name": name,
                             "msg": f"{code}{name} 连涨{minutes//60}h {change_pct:.2f}%",
                             "severity": "high"
                         })
@@ -206,6 +216,8 @@ class AlertChecker:
                 elif change_pct <= -min_change:
                     trends.append({
                         "type": "continuous_down",
+                        "code": code,
+                        "name": name,
                         "msg": f"{code}{name} 连跌{minutes//60}h {abs(change_pct):.2f}%",
                         "severity": "high"
                     })

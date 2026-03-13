@@ -15,7 +15,7 @@ from database import save_minute_data
 class EastMoneyClient:
     """东方财富行情数据客户端"""
     
-    BASE_URL = "https://push2.eastmoney.com"
+    BASE_URL = "https://push2his.eastmoney.com"
     
     def __init__(self):
         self.session = requests.Session()

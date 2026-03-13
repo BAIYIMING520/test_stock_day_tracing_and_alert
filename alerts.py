@@ -6,24 +6,23 @@
 import sys
 sys.path.append(__file__.rsplit('/', 1)[0])
 
-from database import get_minute_data
+from database import get_minute_data, save_alert_to_db, get_alert_history_from_db, clear_alert_history_from_db
 from config import get_alerts_config, get_quote0_config, load_config
 from client import EastMoneyClient
 import subprocess
 from datetime import datetime
 import numpy as np
-from collections import deque
 
-# 告警历史记录（内存存储，最多保留200条）
-alert_history = deque(maxlen=200)
 
-def get_alert_history():
-    """获取告警历史"""
-    return list(alert_history)
+def get_alert_history(days: int = 5, code: str = None, alert_type: str = None):
+    """获取告警历史（从数据库）"""
+    return get_alert_history_from_db(days=days, code=code, alert_type=alert_type)
+
 
 def clear_alert_history():
     """清空告警历史"""
-    alert_history.clear()
+    clear_alert_history_from_db()
+
 
 class AlertChecker:
     def __init__(self):
@@ -315,12 +314,12 @@ class AlertChecker:
         Args:
             alert: 告警 dict
         """
-        # 记录到历史
+        # 记录到数据库
         alert_with_time = {
             **alert,
             "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
-        alert_history.append(alert_with_time)
+        save_alert_to_db(alert_with_time)
         
         # 发送到 Quote/0
         self.push_to_quote0(alert.get("msg", ""))

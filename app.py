@@ -254,6 +254,10 @@ HTML_TEMPLATE = '''
             border-left-color: #ff6b6b;
             background: linear-gradient(90deg, rgba(255,107,107,0.1) 0%, transparent 100%);
         }
+        .alert-item.today {
+            border: 2px solid #00d4ff;
+            box-shadow: 0 0 10px rgba(0,212,255,0.3);
+        }
         .alert-item.medium {
             border-left-color: #ffa500;
             background: linear-gradient(90deg, rgba(255,165,0,0.1) 0%, transparent 100%);
@@ -395,6 +399,17 @@ HTML_TEMPLATE = '''
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
                 <h3>🚨 告警历史</h3>
                 <button class="alert-clear" onclick="clearAlertHistory()">清空</button>
+            </div>
+            <!-- 筛选条件 -->
+            <div style="display:flex;gap:10px;margin-bottom:15px;flex-wrap:wrap">
+                <select id="alertFilterDays" onchange="loadAlertHistory()" style="background:#16213e;color:#fff;padding:5px 10px;border:1px solid #333;border-radius:4px">
+                    <option value="1">最近1天</option>
+                    <option value="3" selected>最近3天</option>
+                    <option value="5">最近5天</option>
+                    <option value="10">最近10天</option>
+                </select>
+                <input type="text" id="alertFilterCode" placeholder="股票代码" onchange="loadAlertHistory()" style="background:#16213e;color:#fff;padding:5px 10px;border:1px solid #333;border-radius:4px;width:80px">
+                <button onclick="loadAlertHistory()" style="background:#00d4ff;color:#000;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">查询</button>
             </div>
             <div class="alert-list" id="alertList">
                 <div class="empty-state">
@@ -813,17 +828,34 @@ HTML_TEMPLATE = '''
             if (tabName === 'stocks') {
                 document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
                 document.getElementById('tab-stocks').classList.add('active');
+                // 停止告警刷新
+                if (window.alertRefreshTimer) {
+                    clearInterval(window.alertRefreshTimer);
+                    window.alertRefreshTimer = null;
+                }
             } else {
                 document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
                 document.getElementById('tab-alerts').classList.add('active');
                 loadAlertHistory();  // 切换到告警Tab时加载历史
+                // 启动告警自动刷新（每30秒）
+                if (!window.alertRefreshTimer) {
+                    window.alertRefreshTimer = setInterval(loadAlertHistory, 30000);
+                }
             }
         }
+        
+        let lastAlertCount = 0;
         
         // 加载告警历史
         async function loadAlertHistory() {
             try {
-                const res = await fetch('/api/alerts/history');
+                const days = document.getElementById('alertFilterDays').value;
+                const code = document.getElementById('alertFilterCode').value;
+                
+                let url = '/api/alerts/history?days=' + days;
+                if (code) url += '&code=' + code;
+                
+                const res = await fetch(url);
                 const alerts = await res.json();
                 const list = document.getElementById('alertList');
                 
@@ -832,17 +864,22 @@ HTML_TEMPLATE = '''
                     return;
                 }
                 
-                // 按时间倒序排列
+                // 按时间倒序排列（最新的在前面）
                 alerts.reverse();
                 
+                // 标记今天的告警
+                const today = new Date().toISOString().slice(0, 10);
+                
                 list.innerHTML = alerts.map(alert => {
+                    const isToday = alert.alert_time && alert.alert_time.slice(0, 10) === today;
                     const severity = alert.severity || 'low';
                     const icon = alert.type === 'price_change' ? '📈' : 
                                  alert.type === 'rapid_change' ? '⚡' :
                                  alert.type === 'volume_surge' ? '📊' :
                                  alert.type === 'continuous_up' ? '📈📈' :
                                  alert.type === 'continuous_down' ? '📉📉' : '🚨';
-                    return '<div class="alert-item ' + severity + '">' +
+                    const todayClass = isToday ? ' today' : '';
+                    return '<div class="alert-item ' + severity + todayClass + '">' +
                         '<span class="alert-icon">' + icon + '</span>' +
                         '<div class="alert-info">' +
                         '<div class="alert-msg">' + alert.msg + '</div>' +
@@ -949,7 +986,13 @@ def api_get_alert_history():
     if action == 'clear':
         clear_alert_history()
         return jsonify({'success': True, 'message': '已清空'})
-    return jsonify(get_alert_history())
+    
+    # 支持查询参数
+    days = int(request.args.get('days', 5))
+    code = request.args.get('code')
+    alert_type = request.args.get('type')
+    
+    return jsonify(get_alert_history(days=days, code=code, alert_type=alert_type))
 
 # ==================== 主程序 ====================
 

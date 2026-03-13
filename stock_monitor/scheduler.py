@@ -76,30 +76,14 @@ class BackgroundTask:
                 if alerts_config.get("open_close_push", {}).get("enabled"):
                     if is_market_open_time() and alerts_config["open_close_push"].get("push_open"):
                         # 开盘推送
-                        name = realtime.get('name', code)
-                        msg = f"{name} 开盘 {realtime.get('price')}元"
-                        alert = {
-                            "type": "market_open",
-                            "code": code,
-                            "name": name,
-                            "msg": msg,
-                            "severity": "low"
-                        }
-                        checker.push_all(alert)
+                        msg = f"{code} 开盘 {realtime.get('price')}元"
+                        checker.push_to_quote0(msg)
                         print(f"  📢 开盘推送: {msg}")
                     
                     if is_market_close_time() and alerts_config["open_close_push"].get("push_close"):
                         # 收盘推送
-                        name = realtime.get('name', code)
-                        msg = f"{name} 收盘 {realtime.get('price')}元"
-                        alert = {
-                            "type": "market_close",
-                            "code": code,
-                            "name": name,
-                            "msg": msg,
-                            "severity": "low"
-                        }
-                        checker.push_all(alert)
+                        msg = f"{code} 收盘 {realtime.get('price')}元"
+                        checker.push_to_quote0(msg)
                         print(f"  📢 收盘推送: {msg}")
                 
             except Exception as e:

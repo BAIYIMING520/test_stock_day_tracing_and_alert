@@ -167,13 +167,15 @@ def save_alert_to_db(alert: dict):
     conn.close()
 
 
-def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str = None) -> list:
+def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str = None, page: int = 1, page_size: int = 30) -> dict:
     """从数据库获取告警历史
     
     Args:
         days: 查询最近几天的数据，默认5天
         code: 按股票代码筛选
         alert_type: 按告警类型筛选
+        page: 页码，默认1
+        page_size: 每页数量，默认30
     """
     conn = get_db()
     cursor = conn.cursor()
@@ -181,24 +183,39 @@ def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str =
     # 计算日期范围
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     
-    query = "SELECT * FROM alert_history WHERE alert_time >= ?"
+    # 查询条件
+    where_clause = "WHERE alert_time >= ?"
     params = [start_date]
     
     if code:
-        query += " AND code = ?"
+        where_clause += " AND code = ?"
         params.append(code)
     
     if alert_type:
-        query += " AND type = ?"
+        where_clause += " AND type = ?"
         params.append(alert_type)
     
-    query += " ORDER BY alert_time DESC"
+    # 获取总数
+    count_query = f"SELECT COUNT(*) FROM alert_history {where_clause}"
+    cursor.execute(count_query, params)
+    total = cursor.fetchone()[0]
+    
+    # 分页查询
+    offset = (page - 1) * page_size
+    query = f"SELECT * FROM alert_history {where_clause} ORDER BY alert_time DESC LIMIT ? OFFSET ?"
+    params.extend([page_size, offset])
     
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
     
-    return [dict(row) for row in rows]
+    return {
+        "data": [dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size
+    }
 
 
 def clear_alert_history_from_db():

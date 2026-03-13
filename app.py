@@ -407,6 +407,7 @@ HTML_TEMPLATE = '''
                     <option value="3" selected>最近3天</option>
                     <option value="5">最近5天</option>
                     <option value="10">最近10天</option>
+                    <option value="30">最近30天</option>
                 </select>
                 <input type="text" id="alertFilterCode" placeholder="股票代码" onchange="loadAlertHistory()" style="background:#16213e;color:#fff;padding:5px 10px;border:1px solid #333;border-radius:4px;width:80px">
                 <button onclick="loadAlertHistory()" style="background:#00d4ff;color:#000;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">查询</button>
@@ -416,6 +417,12 @@ HTML_TEMPLATE = '''
                     <h2>暂无告警记录</h2>
                     <p>触发告警后会显示在这里</p>
                 </div>
+            </div>
+            <!-- 分页 -->
+            <div id="alertPagination" style="display:flex;justify-content:center;gap:10px;margin-top:20px;align-items:center">
+                <button onclick="goToAlertPage(-1)" style="background:#333;color:#fff;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">上一页</button>
+                <span id="alertPageInfo" style="color:#888">1/1</span>
+                <button onclick="goToAlertPage(1)" style="background:#333;color:#fff;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">下一页</button>
             </div>
         </div>
     </div>
@@ -846,23 +853,35 @@ HTML_TEMPLATE = '''
         
         let lastAlertCount = 0;
         
+        let alertCurrentPage = 1;
+        
         // 加载告警历史
         async function loadAlertHistory() {
             try {
                 const days = document.getElementById('alertFilterDays').value;
                 const code = document.getElementById('alertFilterCode').value;
                 
-                let url = '/api/alerts/history?days=' + days;
+                let url = '/api/alerts/history?days=' + days + '&page=' + alertCurrentPage + '&page_size=30';
                 if (code) url += '&code=' + code;
                 
                 const res = await fetch(url);
-                const alerts = await res.json();
+                const result = await res.json();
                 const list = document.getElementById('alertList');
+                
+                // 处理分页返回格式
+                const alerts = result.data || result;
+                const total = result.total || alerts.length;
+                const totalPages = result.total_pages || 1;
                 
                 if (!alerts || alerts.length === 0) {
                     list.innerHTML = '<div class="empty-state"><h2>暂无告警记录</h2><p>触发告警后会显示在这里</p></div>';
+                    document.getElementById('alertPagination').style.display = 'none';
                     return;
                 }
+                
+                // 显示分页信息
+                document.getElementById('alertPagination').style.display = 'flex';
+                document.getElementById('alertPageInfo').textContent = alertCurrentPage + '/' + totalPages + ' (共' + total + '条)';
                 
                 // 按时间倒序排列（最新的在前面）
                 alerts.reverse();
@@ -897,6 +916,21 @@ HTML_TEMPLATE = '''
                 }).join('');
             } catch (e) {
                 console.error('加载告警历史失败:', e);
+            }
+        }
+        
+        // 告警分页
+        function goToAlertPage(delta) {
+            const pageInfo = document.getElementById('alertPageInfo').textContent;
+            const match = pageInfo.match(/(\d+)\/(\d+)/);
+            if (match) {
+                const currentPage = parseInt(match[1]);
+                const totalPages = parseInt(match[2]);
+                const newPage = currentPage + delta;
+                if (newPage >= 1 && newPage <= totalPages) {
+                    alertCurrentPage = newPage;
+                    loadAlertHistory();
+                }
             }
         }
         
@@ -1000,8 +1034,10 @@ def api_get_alert_history():
     days = int(request.args.get('days', 5))
     code = request.args.get('code')
     alert_type = request.args.get('type')
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('page_size', 30))
     
-    return jsonify(get_alert_history(days=days, code=code, alert_type=alert_type))
+    return jsonify(get_alert_history(days=days, code=code, alert_type=alert_type, page=page, page_size=page_size))
 
 # ==================== 主程序 ====================
 

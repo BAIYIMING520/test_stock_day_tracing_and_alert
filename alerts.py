@@ -14,9 +14,9 @@ from datetime import datetime
 import numpy as np
 
 
-def get_alert_history(days: int = 5, code: str = None, alert_type: str = None):
+def get_alert_history(days: int = 5, code: str = None, alert_type: str = None, page: int = 1, page_size: int = 30):
     """获取告警历史（从数据库）"""
-    return get_alert_history_from_db(days=days, code=code, alert_type=alert_type)
+    return get_alert_history_from_db(days=days, code=code, alert_type=alert_type, page=page, page_size=page_size)
 
 
 def clear_alert_history():

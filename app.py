@@ -4,7 +4,9 @@ A股分时监控服务 - Web服务器
 功能：前端管理界面 + 实时数据展示 + 分时图表
 """
 
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, session
+from functools import wraps
+import hashlib
 import threading
 import time
 import os
@@ -15,9 +17,37 @@ sys.path.append(os.path.dirname(__file__))
 
 from config import load_config, save_config, add_stock, remove_stock, get_stocks, is_trading_time
 from client import EastMoneyClient, get_all_realtime
-from database import init_db, get_minute_data
+from database import init_db, get_minute_data, verify_user, get_user_id, get_user_stocks, add_user_stock, remove_user_stock, get_user_alert_config, save_user_alert_config
 
 app = Flask(__name__)
+app.secret_key = 'stock-monitor-secret-key'
+
+# Basic认证装饰器
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not verify_user(auth.username, auth.password):
+            return jsonify({'error': 'Unauthorized'}), 401
+        # 存入session
+        session['user_id'] = get_user_id(auth.username)
+        session['username'] = auth.username
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_admin(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not verify_user(auth.username, auth.password):
+            return jsonify({'error': 'Unauthorized'}), 401
+        if auth.username != 'admin':
+            return jsonify({'error': 'Admin only'}), 403
+        session['user_id'] = get_user_id(auth.username)
+        session['username'] = auth.username
+        return f(*args, **kwargs)
+    return decorated
 
 # 初始化数据库
 init_db()
@@ -351,6 +381,15 @@ HTML_TEMPLATE = '''
     </style>
 </head>
 <body>
+    <!-- 登录弹窗 -->
+    <div id="loginModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:999;justify-content:center;align-items:center">
+        <div style="background:#16213e;padding:40px;border-radius:16px;text-align:center;max-width:400px;width:90%">
+            <h2 style="color:#00d4ff;margin-bottom:30px">🔐 登录</h2>
+            <input type="text" id="loginUsername" placeholder="用户名" style="width:100%;padding:12px;margin-bottom:15px;border:none;border-radius:8px;background:#1a1a2e;color:#fff;font-size:16px">
+            <input type="password" id="loginPassword" placeholder="密码" style="width:100%;padding:12px;margin-bottom:20px;border:none;border-radius:8px;background:#1a1a2e;color:#fff;font-size:16px">
+            <button onclick="doLogin()" style="width:100%;padding:12px;background:#00d4ff;color:#000;border:none;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer">登录</button>
+        </div>
+    </div>
     <div class="container">
         <h1>📈 A股分时监控</h1>
         
@@ -372,6 +411,7 @@ HTML_TEMPLATE = '''
             <button class="tab-btn active" onclick="switchTab('stocks')">📊 自选股</button>
             <button class="tab-btn" onclick="switchTab('alerts')">🚨 告警历史</button>
             <button class="tab-btn" onclick="switchTab('heatmap')">🌡️ 市场热力图</button>
+            <button class="tab-btn" onclick="switchTab('admin')" id="adminTabBtn" style="display:none">⚙️ 用户管理</button>
         </div>
         
         <!-- Tab 内容：自选股 -->
@@ -435,6 +475,27 @@ HTML_TEMPLATE = '''
         <div class="tab-content" id="tab-heatmap">
             <iframe src="https://quote.eastmoney.com/stockhotmap/" 
                     style="width:100%;height:80vh;border:none;frameborder:0"></iframe>
+        </div>
+        
+        <!-- Tab 内容：用户管理 -->
+        <div class="tab-content" id="tab-admin">
+            <h2>👥 用户管理</h2>
+            <div style="margin-bottom:20px">
+                <input type="text" id="newUsername" placeholder="用户名" style="padding:8px;border-radius:4px;border:1px solid #333;background:#16213e;color:#fff">
+                <input type="password" id="newPassword" placeholder="密码" style="padding:8px;border-radius:4px;border:1px solid #333;background:#16213e;color:#fff">
+                <button onclick="createUser()" style="background:#00d4ff;color:#000;padding:8px 20px;border:none;border-radius:4px;cursor:pointer">创建用户</button>
+            </div>
+            <table style="width:100%;border-collapse:collapse">
+                <thead>
+                    <tr style="background:#16213e">
+                        <th style="padding:10px;text-align:left">ID</th>
+                        <th style="padding:10px;text-align:left">用户名</th>
+                        <th style="padding:10px;text-align:left">创建时间</th>
+                        <th style="padding:10px;text-align:left">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="userList"></tbody>
+            </table>
         </div>
     </div>
     
@@ -512,15 +573,78 @@ HTML_TEMPLATE = '''
         let stocks = [];
         let autoRefresh = null;
         let minuteChart = null;
-        
+        let authHeader = null;
+
+        // 获取认证头
+        function getAuthHeader() {
+            if (!authHeader) {
+                const saved = sessionStorage.getItem('auth');
+                if (saved) {
+                    authHeader = saved;
+                }
+            }
+            return authHeader;
+        }
+
+        // 设置认证信息
+        function setAuth(username, password) {
+            authHeader = 'Basic ' + btoa(username + ':' + password);
+            sessionStorage.setItem('auth', authHeader);
+        }
+
+        // 清空认证信息
+        function clearAuth() {
+            authHeader = null;
+            sessionStorage.removeItem('auth');
+        }
+
+        // 带认证的 fetch
+        async function authFetch(url, options = {}) {
+            const headers = { ...(options.headers || {}) };
+            const auth = getAuthHeader();
+            console.log('authFetch:', url, 'auth:', auth);
+            if (auth) {
+                headers['Authorization'] = auth;
+            }
+            return fetch(url, { ...options, headers });
+        }
+
+        // 显示登录弹窗
+        function showLoginForm() {
+            document.getElementById('loginModal').style.display = 'flex';
+            document.getElementById('loginUsername').focus();
+        }
+
+        // 执行登录
+        function doLogin() {
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            if (!username || !password) {
+                alert('请输入用户名和密码');
+                return;
+            }
+            setAuth(username, password);
+            document.getElementById('loginModal').style.display = 'none';
+            checkAuth();
+        }
+
+        // 回车登录
+        document.getElementById('loginPassword').addEventListener('keypress', e => {
+            if (e.key === 'Enter') doLogin();
+        });
+
         // 加载股票列表
         async function loadStocks() {
-            const res = await fetch('/api/stocks');
+            const res = await authFetch('/api/stocks');
+            if (res.status === 401) {
+                document.body.innerHTML = '<div style="padding:50px;text-align:center"><h2>🔒 请重新登录</h2><p>请刷新页面并输入正确的账户密码</p><button onclick="showLoginForm()">登录</button></div>';
+                return;
+            }
             stocks = await res.json();
             document.getElementById('stockCount').textContent = stocks.length;
             
             // 获取刷新间隔配置
-            const alertsRes = await fetch('/api/alerts');
+            const alertsRes = await authFetch('/api/alerts');
             const alerts = await alertsRes.json();
             const refreshInterval = (alerts.refresh_interval || 60) * 1000;
             
@@ -574,7 +698,7 @@ HTML_TEMPLATE = '''
                 return;
             }
             
-            const res = await fetch('/api/stocks', {
+            const res = await authFetch('/api/stocks', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({code})
@@ -593,7 +717,7 @@ HTML_TEMPLATE = '''
         async function deleteStock(code) {
             if (!confirm(`确定删除 ${code}?`)) return;
             
-            const res = await fetch(`/api/stocks/${code}`, {method: 'DELETE'});
+            const res = await authFetch(`/api/stocks/${code}`, {method: 'DELETE'});
             const result = await res.json();
             if (result.success) {
                 loadStocks();
@@ -602,7 +726,7 @@ HTML_TEMPLATE = '''
         
         // 刷新数据
         async function refreshData() {
-            const res = await fetch('/api/realtime');
+            const res = await authFetch('/api/realtime');
             const data = await res.json();
             
             stocks = data;
@@ -638,7 +762,7 @@ HTML_TEMPLATE = '''
             title.textContent = `${stock?.name || code} - 分时图 (昨收: ${yesterdayClose || '-'})`;
             
             // 获取分时数据
-            const res = await fetch(`/api/minute/${code}`);
+            const res = await authFetch(`/api/minute/${code}`);
             const data = await res.json();
             
             loading.style.display = 'none';
@@ -734,7 +858,7 @@ HTML_TEMPLATE = '''
         
         // 打开告警配置
         async function openAlertConfig() {
-            const res = await fetch('/api/alerts');
+            const res = await authFetch('/api/alerts');
             const config = await res.json();
             
             // 刷新间隔
@@ -819,7 +943,7 @@ HTML_TEMPLATE = '''
                 }
             };
             
-            await fetch('/api/alerts', {
+            await authFetch('/api/alerts', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(config)
@@ -862,6 +986,10 @@ HTML_TEMPLATE = '''
             } else if (tabName === 'heatmap') {
                 document.querySelector('.tab-btn:nth-child(3)').classList.add('active');
                 document.getElementById('tab-heatmap').classList.add('active');
+            } else if (tabName === 'admin') {
+                document.querySelector('.tab-btn:nth-child(4)').classList.add('active');
+                document.getElementById('tab-admin').classList.add('active');
+                loadUsers();  // 加载用户列表
             }
         }
         
@@ -878,7 +1006,7 @@ HTML_TEMPLATE = '''
                 let url = '/api/alerts/history?days=' + days + '&page=' + alertCurrentPage + '&page_size=30';
                 if (code) url += '&code=' + code;
                 
-                const res = await fetch(url);
+                const res = await authFetch(url);
                 const result = await res.json();
                 const list = document.getElementById('alertList');
                 
@@ -958,13 +1086,109 @@ HTML_TEMPLATE = '''
             }
             if (!confirm('确定要清空 ' + numDays + ' 天前的所有告警记录吗？')) return;
             
-            await fetch('/api/alerts/history?action=clear&days=' + numDays, {method: 'GET'});
+            await authFetch('/api/alerts/history?action=clear&days=' + numDays, {method: 'GET'});
             alert('已清理 ' + numDays + ' 天前的告警记录');
             loadAlertHistory();
         }
         
+        // 用户管理
+        async function loadUsers() {
+            try {
+                const res = await authFetch('/api/admin/users');
+                const users = await res.json();
+                document.getElementById('userList').innerHTML = users.map(u =>
+                    '<tr style="border-bottom:1px solid #333">' +
+                    '<td style="padding:10px">' + u.id + '</td>' +
+                    '<td style="padding:10px">' + u.username + '</td>' +
+                    '<td style="padding:10px">' + u.created_at + '</td>' +
+                    '<td style="padding:10px">' +
+                    '<button onclick="editUser(&#39;' + u.username + '&#39;)" style="background:#00d4ff;color:#000;padding:5px 10px;border:none;border-radius:4px;cursor:pointer;margin-right:5px">改密</button>' +
+                    (u.username !== 'admin' ?
+                    '<button onclick="deleteUser(&#39;' + u.username + '&#39;)" style="background:#ff6b6b;color:#fff;padding:5px 10px;border:none;border-radius:4px;cursor:pointer">删除</button>' :
+                    '<span style="color:#888">管理员</span>') +
+                    '</td></tr>'
+                ).join('');
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        // 修改用户密码
+        function editUser(username) {
+            const newPassword = prompt('请输入用户 ' + username + ' 的新密码:');
+            if (!newPassword) return;
+            if (newPassword.length < 1) {
+                alert('密码不能为空');
+                return;
+            }
+            authFetch('/api/admin/users/' + username, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({password: newPassword})
+            }).then(r => r.json()).then(data => {
+                alert(data.message || data.error);
+            }).catch(e => {
+                alert('修改失败');
+            });
+        }
+        
+        async function createUser() {
+            const username = document.getElementById('newUsername').value;
+            const password = document.getElementById('newPassword').value;
+            if (!username || !password) {
+                alert('请输入用户名和密码');
+                return;
+            }
+            const res = await authFetch('/api/admin/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const result = await res.json();
+            alert(result.message || result.error);
+            if (result.success) {
+                document.getElementById('newUsername').value = '';
+                document.getElementById('newPassword').value = '';
+                loadUsers();
+            }
+        }
+        
+        async function deleteUser(username) {
+            if (!confirm('确定要删除用户 ' + username + ' 吗？')) return;
+            const res = await authFetch('/api/admin/users/' + username, {method: 'DELETE'});
+            const result = await res.json();
+            alert(result.message || result.error);
+            if (result.success) {
+                loadUsers();
+            }
+        }
+        
         // 初始化
-        loadStocks();
+        // 检查是否是管理员
+        authFetch('/api/me').then(r => r.json()).then(data => {
+            if (data.username === 'admin') {
+                document.getElementById('adminTabBtn').style.display = 'inline-block';
+            }
+        }).catch(() => {});
+        
+        // 检查是否已登录，如果没有则弹出登录框
+        async function checkAuth() {
+            const auth = getAuthHeader();
+            if (!auth) {
+                // 没有认证信息，弹出登录框
+                showLoginForm();
+            } else {
+                // 验证认证是否有效
+                const res = await authFetch('/api/me');
+                if (res.status === 401) {
+                    showLoginForm();
+                } else {
+                    loadStocks();
+                }
+            }
+        }
+
+        checkAuth();
     </script>
 </body>
 </html>
@@ -977,12 +1201,15 @@ def index():
     return render_template_string(HTML_TEMPLATE, is_trading=is_trading_time())
 
 @app.route('/api/stocks', methods=['GET'])
+@require_auth
 def api_get_stocks():
+    
     """获取自选股列表"""
     stocks = get_stocks()
     return jsonify(stocks)
 
 @app.route('/api/stocks', methods=['POST'])
+@require_auth
 def api_add_stock():
     """添加股票"""
     data = request.get_json()
@@ -998,12 +1225,14 @@ def api_add_stock():
     return jsonify({'success': True, 'message': '添加成功' if success else '股票已存在'})
 
 @app.route('/api/stocks/<code>', methods=['DELETE'])
+@require_auth
 def api_delete_stock(code):
     """删除股票"""
     success = remove_stock(code)
     return jsonify({'success': True})
 
 @app.route('/api/realtime', methods=['GET'])
+@require_auth
 def api_realtime():
     """获取实时行情"""
     stocks = get_stocks()
@@ -1024,18 +1253,21 @@ def api_realtime():
     return jsonify(results)
 
 @app.route('/api/minute/<code>', methods=['GET'])
+@require_auth
 def api_minute(code):
     """获取分时数据"""
     data = get_minute_data(code)
     return jsonify(data)
 
 @app.route('/api/alerts', methods=['GET'])
+@require_auth
 def api_get_alerts():
     """获取告警配置"""
     from config import get_alerts_config
     return jsonify(get_alerts_config())
 
 @app.route('/api/alerts', methods=['POST'])
+@require_auth
 def api_save_alerts():
     """保存告警配置"""
     from config import save_alerts_config
@@ -1044,6 +1276,7 @@ def api_save_alerts():
     return jsonify({'success': True})
 
 @app.route('/api/alerts/history', methods=['GET'])
+@require_auth
 def api_get_alert_history():
     """获取告警历史"""
     from alerts import get_alert_history, clear_alert_history
@@ -1066,16 +1299,120 @@ def api_get_alert_history():
     
     return jsonify(get_alert_history(days=days, code=code, alert_type=alert_type, page=page, page_size=page_size))
 
+# ==================== 用户管理 API ====================
+
+@app.route('/api/me', methods=['GET'])
+@require_auth
+def api_current_user():
+    """获取当前用户信息"""
+    return jsonify({'username': session.get('username', '')})
+
+
+@app.route('/api/admin/users', methods=['GET'])
+@require_admin
+def api_list_users():
+    """列出所有用户（仅管理员）"""
+    import sqlite3
+    from pathlib import Path
+    DB_FILE = Path(__file__).parent / "stock_data.db"
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, username, created_at FROM users ORDER BY id')
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(users)
+
+
+@app.route('/api/admin/users', methods=['POST'])
+@require_admin
+def api_create_user():
+    """创建用户（仅管理员）"""
+    from database import create_user
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+    
+    if not username or not password:
+        return jsonify({'error': '用户名和密码不能为空'}), 400
+    
+    if create_user(username, password):
+        return jsonify({'success': True, 'message': f'用户 {username} 创建成功'})
+    else:
+        return jsonify({'error': '用户名已存在'}), 400
+
+
+@app.route('/api/admin/users/<username>', methods=['PUT'])
+@require_admin
+def api_change_password(username):
+    """修改用户密码（仅管理员）"""
+    import hashlib
+    import sqlite3
+    from pathlib import Path
+    
+    data = request.get_json()
+    new_password = data.get('password', '').strip()
+    
+    if not new_password:
+        return jsonify({'error': '密码不能为空'}), 400
+    
+    DB_FILE = Path(__file__).parent / "stock_data.db"
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    hashed = hashlib.sha256(new_password.encode()).hexdigest()
+    cursor.execute('UPDATE users SET password=? WHERE username=?', (hashed, username))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    
+    if affected > 0:
+        return jsonify({'success': True, 'message': f'用户 {username} 密码已更新'})
+    else:
+        return jsonify({'error': '用户不存在'}), 404
+
+
+@app.route('/api/admin/users/<username>', methods=['DELETE'])
+@require_admin
+def api_delete_user(username):
+    """删除用户（仅管理员）"""
+    import sqlite3
+    from pathlib import Path
+    
+    if username == 'admin':
+        return jsonify({'error': '不能删除管理员账号'}), 400
+    
+    DB_FILE = Path(__file__).parent / "stock_data.db"
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM users WHERE username=?', (username,))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    
+    if affected > 0:
+        return jsonify({'success': True, 'message': f'用户 {username} 已删除'})
+    else:
+        return jsonify({'error': '用户不存在'}), 404
+
+
 # ==================== 主程序 ====================
 
 def main():
+    # 初始化数据库并创建默认用户
+    from database import init_db, create_user, verify_user
+    init_db()
+    # 创建默认 admin 用户（如果不存在）
+    if not verify_user('admin', 'admin'):
+        create_user('admin', 'admin')
+        print("默认用户已创建: admin / admin")
+
     # 启动后台定时任务
     from scheduler import background_task
     from config import load_config
     config = load_config()
     interval = config.get("refresh_interval", 60)
     background_task.start(interval=interval)
-    
+
     print("=" * 50)
     print("A股分时监控服务启动")
     print("=" * 50)

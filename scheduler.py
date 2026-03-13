@@ -67,10 +67,10 @@ class BackgroundTask:
                 checker = AlertChecker()
                 alerts = checker.check_all(code, realtime)
                 
-                # 4. 推送告警
+                # 4. 推送告警（保存到数据库 + 推送到Quote）
                 for alert in alerts:
                     print(f"  🚨 {alert['msg']}")
-                    checker.push_to_quote0(alert['msg'])
+                    checker.push_all(alert)  # 同时保存到DB和推送
                 
                 # 5. 开盘/收盘推送
                 if alerts_config.get("open_close_push", {}).get("enabled"):

@@ -10,8 +10,15 @@ from database import get_minute_data, save_alert_to_db, get_alert_history_from_d
 from config import get_alerts_config, get_quote0_config, load_config
 from client import EastMoneyClient
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
+from collections import defaultdict
+
+# Quote推送去重跟踪: {(code, alert_type): [timestamp1, timestamp2, ...]}
+# 5分钟内最多推送3次
+_quote_push_history = defaultdict(list)
+_QUOTE_COOLDOWN_SECONDS = 300  # 5分钟
+_QUOTE_MAX_PUSHES = 3  # 最多3次
 
 
 def get_alert_history(days: int = 5, code: str = None, alert_type: str = None, page: int = 1, page_size: int = 30):
@@ -224,13 +231,29 @@ class AlertChecker:
         
         return trends
     
-    def push_to_quote0(self, message: str, delay: float = 2.0):
+    def push_to_quote0(self, message: str, delay: float = 2.0, code: str = None, alert_type: str = None):
         """推送到Quote/0
         
         Args:
             message: 推送内容
             delay: 推送间隔（秒），默认2秒
+            code: 股票代码（用于去重）
+            alert_type: 告警类型（用于去重）
         """
+        # 去重检查：5分钟内同股票同类型最多推送3次
+        if code and alert_type:
+            key = (code, alert_type)
+            now = datetime.now()
+            # 清理超过5分钟的记录
+            _quote_push_history[key] = [t for t in _quote_push_history[key] 
+                                         if now - t < timedelta(seconds=_QUOTE_COOLDOWN_SECONDS)]
+            # 检查推送次数
+            if len(_quote_push_history[key]) >= _QUOTE_MAX_PUSHES:
+                print(f"  ⏭️ Quote推送跳过（{code} {alert_type} 5分钟内已达3次）")
+                return False
+            # 记录本次推送
+            _quote_push_history[key].append(now)
+        
         import time
         time.sleep(delay)
         if not self.quote0.get("enabled"):
@@ -334,7 +357,7 @@ class AlertChecker:
         save_alert_to_db(alert_with_time)
         
         # 发送到 Quote/0
-        self.push_to_quote0(alert.get("msg", ""))
+        self.push_to_quote0(alert.get("msg", ""), code=alert.get("code"), alert_type=alert.get("type"))
         # 发送到邮件
         self.push_to_email(alert)
 

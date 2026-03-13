@@ -371,6 +371,7 @@ HTML_TEMPLATE = '''
         <div class="tab-nav">
             <button class="tab-btn active" onclick="switchTab('stocks')">📊 自选股</button>
             <button class="tab-btn" onclick="switchTab('alerts')">🚨 告警历史</button>
+            <button class="tab-btn" onclick="switchTab('heatmap')">🌡️ 市场热力图</button>
         </div>
         
         <!-- Tab 内容：自选股 -->
@@ -379,7 +380,6 @@ HTML_TEMPLATE = '''
         <div class="add-form">
             <input type="text" id="stockInput" placeholder="输入股票代码 (如 600519, 000001, 300750)" maxlength="6">
             <button class="btn-add" onclick="addStock()">+ 添加股票</button>
-            <button class="btn-add" style="background:#ff6b6b" onclick="openAlertConfig()">⚙️ 告警配置</button>
         </div>
         
         <div class="stock-grid" id="stockGrid">
@@ -398,13 +398,18 @@ HTML_TEMPLATE = '''
         <div class="tab-content" id="tab-alerts">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
                 <h3>🚨 告警历史</h3>
-                <button class="alert-clear" onclick="clearAlertHistory()">清空</button>
+                <div style="display:flex;gap:10px">
+                    <button onclick="loadAlertHistory()" style="background:#00d4ff;color:#000;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">🔄 刷新</button>
+                    <button class="alert-clear" onclick="openAlertConfig()">⚙️ 配置</button>
+                    <button class="alert-clear" onclick="clearAlertHistory()">清空</button>
+                </div>
             </div>
             <!-- 筛选条件 -->
             <div style="display:flex;gap:10px;margin-bottom:15px;flex-wrap:wrap">
                 <select id="alertFilterDays" onchange="loadAlertHistory()" style="background:#16213e;color:#fff;padding:5px 10px;border:1px solid #333;border-radius:4px">
+                    <option value="0.125" selected>最近3小时</option>
                     <option value="1">最近1天</option>
-                    <option value="3" selected>最近3天</option>
+                    <option value="3">最近3天</option>
                     <option value="5">最近5天</option>
                     <option value="10">最近10天</option>
                     <option value="30">最近30天</option>
@@ -424,6 +429,12 @@ HTML_TEMPLATE = '''
                 <span id="alertPageInfo" style="color:#888">1/1</span>
                 <button onclick="goToAlertPage(1)" style="background:#333;color:#fff;padding:5px 15px;border:none;border-radius:4px;cursor:pointer">下一页</button>
             </div>
+        </div>
+        
+        <!-- Tab 内容：市场热力图 -->
+        <div class="tab-content" id="tab-heatmap">
+            <iframe src="https://quote.eastmoney.com/stockhotmap/" 
+                    style="width:100%;height:80vh;border:none;frameborder:0"></iframe>
         </div>
     </div>
     
@@ -840,7 +851,7 @@ HTML_TEMPLATE = '''
                     clearInterval(window.alertRefreshTimer);
                     window.alertRefreshTimer = null;
                 }
-            } else {
+            } else if (tabName === 'alerts') {
                 document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
                 document.getElementById('tab-alerts').classList.add('active');
                 loadAlertHistory();  // 切换到告警Tab时加载历史
@@ -848,6 +859,9 @@ HTML_TEMPLATE = '''
                 if (!window.alertRefreshTimer) {
                     window.alertRefreshTimer = setInterval(loadAlertHistory, 30000);
                 }
+            } else if (tabName === 'heatmap') {
+                document.querySelector('.tab-btn:nth-child(3)').classList.add('active');
+                document.getElementById('tab-heatmap').classList.add('active');
             }
         }
         
@@ -883,8 +897,7 @@ HTML_TEMPLATE = '''
                 document.getElementById('alertPagination').style.display = 'flex';
                 document.getElementById('alertPageInfo').textContent = alertCurrentPage + '/' + totalPages + ' (共' + total + '条)';
                 
-                // 按时间倒序排列（最新的在前面）
-                alerts.reverse();
+                // API已按时间倒序返回（最新的在前），无需再反转
                 
                 // 标记今天的告警
                 const today = new Date().toISOString().slice(0, 10);
@@ -936,8 +949,17 @@ HTML_TEMPLATE = '''
         
         // 清空告警历史
         async function clearAlertHistory() {
-            if (!confirm('确定要清空所有告警记录吗？')) return;
-            await fetch('/api/alerts/history?action=clear', {method: 'GET'});
+            const days = prompt('请输入要清理几天前的告警（输入数字，如 7 清理7天前的所有告警）：');
+            if (days === null || days === '') return;
+            const numDays = parseInt(days);
+            if (isNaN(numDays) || numDays < 1) {
+                alert('请输入有效的天数');
+                return;
+            }
+            if (!confirm('确定要清空 ' + numDays + ' 天前的所有告警记录吗？')) return;
+            
+            await fetch('/api/alerts/history?action=clear&days=' + numDays, {method: 'GET'});
+            alert('已清理 ' + numDays + ' 天前的告警记录');
             loadAlertHistory();
         }
         
@@ -1027,11 +1049,16 @@ def api_get_alert_history():
     from alerts import get_alert_history, clear_alert_history
     action = request.args.get('action')
     if action == 'clear':
-        clear_alert_history()
-        return jsonify({'success': True, 'message': '已清空'})
+        days = int(request.args.get('days', 0))
+        if days > 0:
+            clear_alert_history(days=days)
+            return jsonify({'success': True, 'message': f'已清理{days}天前的告警'})
+        else:
+            clear_alert_history()
+            return jsonify({'success': True, 'message': '已清空'})
     
     # 支持查询参数
-    days = int(request.args.get('days', 5))
+    days = float(request.args.get('days', 5))
     code = request.args.get('code')
     alert_type = request.args.get('type')
     page = int(request.args.get('page', 1))

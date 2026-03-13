@@ -180,11 +180,15 @@ def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str =
     conn = get_db()
     cursor = conn.cursor()
     
-    # 计算日期范围
-    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    # 计算日期范围（支持小数天，如0.125=3小时）
+    if days < 1:
+        # 小于1天按小时计算
+        start_date = (datetime.now() - timedelta(hours=days*24)).strftime('%Y-%m-%d %H:%M:%S')
+        where_clause = "WHERE alert_time >= ?"
+    else:
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        where_clause = "WHERE alert_time >= ?"
     
-    # 查询条件
-    where_clause = "WHERE alert_time >= ?"
     params = [start_date]
     
     if code:
@@ -218,13 +222,26 @@ def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str =
     }
 
 
-def clear_alert_history_from_db():
-    """清空告警历史"""
+def clear_alert_history_from_db(days: int = 0):
+    """清空告警历史
+    
+    Args:
+        days: 清理几天前的告警（0或不传则清空全部）
+    """
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM alert_history')
+    if days > 0:
+        # 清理days天前的所有告警
+        cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        cursor.execute('DELETE FROM alert_history WHERE alert_time < ?', (cutoff_date,))
+        deleted = cursor.rowcount
+    else:
+        # 清空全部
+        cursor.execute('DELETE FROM alert_history')
+        deleted = cursor.rowcount
     conn.commit()
     conn.close()
+    print(f"已清理 {deleted} 条告警记录")
 
 
 def cleanup_old_alerts(days: int = 5):

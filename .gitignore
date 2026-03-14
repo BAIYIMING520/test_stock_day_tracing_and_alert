@@ -35,3 +35,15 @@ Thumbs.db
 
 # Skills (reinstallable)
 skills/
+
+## Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/

@@ -26,13 +26,9 @@ def get_alert_history(days: int = 5, code: str = None, alert_type: str = None, p
     return get_alert_history_from_db(days=days, code=code, alert_type=alert_type, page=page, page_size=page_size)
 
 
-def clear_alert_history(days: int = 0):
-    """清空告警历史
-    
-    Args:
-        days: 清理几天前的告警（0或不传则清空全部）
-    """
-    clear_alert_history_from_db(days)
+def clear_alert_history():
+    """清空告警历史"""
+    clear_alert_history_from_db()
 
 
 class AlertChecker:

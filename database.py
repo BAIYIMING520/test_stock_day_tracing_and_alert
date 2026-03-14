@@ -60,49 +60,6 @@ def init_db():
     # 告警历史索引
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_time ON alert_history(alert_time)')
     
-    # 用户表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # 用户自选股表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_stocks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            code TEXT NOT NULL,
-            UNIQUE(user_id, code)
-        )
-    ''')
-    
-    # 用户告警配置表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_alert_config (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER UNIQUE NOT NULL,
-            config TEXT
-        )
-    ''')
-    
-    # 用户告警历史表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_alert_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            code TEXT,
-            name TEXT,
-            type TEXT,
-            msg TEXT,
-            severity TEXT DEFAULT 'info',
-            alert_time TEXT
-        )
-    ''')
-    
     conn.commit()
     conn.close()
 
@@ -223,15 +180,11 @@ def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str =
     conn = get_db()
     cursor = conn.cursor()
     
-    # 计算日期范围（支持小数天，如0.125=3小时）
-    if days < 1:
-        # 小于1天按小时计算
-        start_date = (datetime.now() - timedelta(hours=days*24)).strftime('%Y-%m-%d %H:%M:%S')
-        where_clause = "WHERE alert_time >= ?"
-    else:
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        where_clause = "WHERE alert_time >= ?"
+    # 计算日期范围
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     
+    # 查询条件
+    where_clause = "WHERE alert_time >= ?"
     params = [start_date]
     
     if code:
@@ -265,26 +218,13 @@ def get_alert_history_from_db(days: int = 5, code: str = None, alert_type: str =
     }
 
 
-def clear_alert_history_from_db(days: int = 0):
-    """清空告警历史
-    
-    Args:
-        days: 清理几天前的告警（0或不传则清空全部）
-    """
+def clear_alert_history_from_db():
+    """清空告警历史"""
     conn = get_db()
     cursor = conn.cursor()
-    if days > 0:
-        # 清理days天前的所有告警
-        cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        cursor.execute('DELETE FROM alert_history WHERE alert_time < ?', (cutoff_date,))
-        deleted = cursor.rowcount
-    else:
-        # 清空全部
-        cursor.execute('DELETE FROM alert_history')
-        deleted = cursor.rowcount
+    cursor.execute('DELETE FROM alert_history')
     conn.commit()
     conn.close()
-    print(f"已清理 {deleted} 条告警记录")
 
 
 def cleanup_old_alerts(days: int = 5):
@@ -301,101 +241,3 @@ def cleanup_old_alerts(days: int = 5):
     
     if deleted > 0:
         print(f"已清理 {deleted} 条过期告警记录")
-
-
-# ==================== 用户管理 ====================
-
-def create_user(username: str, password: str) -> bool:
-    """创建用户"""
-    import hashlib
-    conn = get_db()
-    cursor = conn.cursor()
-    hashed = hashlib.sha256(password.encode()).hexdigest()
-    try:
-        cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, hashed))
-        conn.commit()
-        return True
-    except:
-        return False
-    finally:
-        conn.close()
-
-
-def verify_user(username: str, password: str) -> bool:
-    """验证用户"""
-    import hashlib
-    conn = get_db()
-    cursor = conn.cursor()
-    hashed = hashlib.sha256(password.encode()).hexdigest()
-    cursor.execute('SELECT id FROM users WHERE username=? AND password=?', (username, hashed))
-    result = cursor.fetchone()
-    conn.close()
-    return result is not None
-
-
-def get_user_id(username: str) -> int:
-    """获取用户ID"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM users WHERE username=?', (username,))
-    result = cursor.fetchone()
-    conn.close()
-    return result['id'] if result else None
-
-
-def get_user_stocks(user_id: int) -> list:
-    """获取用户自选股"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT code FROM user_stocks WHERE user_id=?', (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r['code'] for r in rows]
-
-
-def add_user_stock(user_id: int, code: str) -> bool:
-    """添加用户自选股"""
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('INSERT OR IGNORE INTO user_stocks (user_id, code) VALUES (?, ?)', (user_id, code))
-        conn.commit()
-        return True
-    except:
-        return False
-    finally:
-        conn.close()
-
-
-def remove_user_stock(user_id: int, code: str) -> bool:
-    """删除用户自选股"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM user_stocks WHERE user_id=? AND code=?', (user_id, code))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_user_alert_config(user_id: int) -> dict:
-    """获取用户告警配置"""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT config FROM user_alert_config WHERE user_id=?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    if result and result['config']:
-        import json as json_module
-        return json_module.loads(result['config'])
-    return None
-
-
-def save_user_alert_config(user_id: int, config: dict):
-    """保存用户告警配置"""
-    import json as json_module
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO user_alert_config (user_id, config) VALUES (?, ?)', 
-                  (user_id, json_module.dumps(config)))
-    conn.commit()
-    conn.close()

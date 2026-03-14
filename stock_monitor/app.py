@@ -15,7 +15,7 @@ sys.path.append(os.path.dirname(__file__))
 
 from config import load_config, save_config, add_stock, remove_stock, get_stocks, is_trading_time
 from client import EastMoneyClient, get_all_realtime
-from database import init_db, get_minute_data
+from database import init_db, get_minute_data, get_latest_close_data
 
 app = Flask(__name__)
 
@@ -997,6 +997,52 @@ def api_realtime():
             results.append(data)
             # 同时获取并保存分时数据
             client.fetch_and_save(code)
+        else:
+            # 非交易时间（API获取失败），从数据库获取最近收盘数据
+            latest = get_latest_close_data(code)
+            if latest and latest.get('close'):
+                results.append({
+                    'code': latest['code'],
+                    'name': latest.get('name', ''),
+                    'price': latest['close'],
+                    'change': 0,
+                    'change_pct': 0,
+                    'yesterday_close': latest['close'],
+                    'volume': 0,
+                    'amount': 0,
+                    'time': f"未开市 {latest.get('date', '')} 收盘 {latest['close']}",
+                    'market_status': 'closed'
+                })
+            else:
+                # 数据库也没有，尝试从日线API获取最近收盘价
+                close_data = client.get_latest_close_price(code)
+                if close_data and close_data.get('price'):
+                    results.append({
+                        'code': close_data['code'],
+                        'name': close_data.get('name', ''),
+                        'price': close_data['price'],
+                        'change': 0,
+                        'change_pct': 0,
+                        'yesterday_close': close_data['price'],
+                        'volume': close_data.get('volume', 0),
+                        'amount': 0,
+                        'time': f"未开市 {close_data.get('date', '')} 收盘 {close_data['price']}",
+                        'market_status': 'closed'
+                    })
+                else:
+                    # 真的没有数据
+                    results.append({
+                        'code': code,
+                        'name': '',
+                        'price': 0,
+                        'change': 0,
+                        'change_pct': 0,
+                        'yesterday_close': 0,
+                        'volume': 0,
+                        'amount': 0,
+                        'time': '暂无数据',
+                        'market_status': 'closed'
+                    })
         time.sleep(0.1)
     
     return jsonify(results)

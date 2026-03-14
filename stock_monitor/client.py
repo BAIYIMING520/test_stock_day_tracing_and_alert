@@ -36,16 +36,19 @@ class EastMoneyClient:
         # 可能的secid列表（按可能性排序）
         candidates = []
         
-        if code.startswith('6') or code.startswith('603'):
-            # 6开头和603开头用深圳secid (东方财富API的特殊设计)
+        if code.startswith('6') and not code.startswith('603'):
+            # 6开头（不含603）用上海secid
+            candidates.append(f'0.{code}')
+        elif code.startswith('603'):
+            # 603开头用深圳secid
             candidates.append(f'1.{code}')
         elif code.startswith('0'):
             if code == '000001':
                 # 000001需要用深圳secid获取上证指数
                 candidates.append(f'1.{code}')
             else:
-                # 002xxx是上海股
-                candidates.append(f'0.{code}')
+                # 002xxx是深圳股
+                candidates.append(f'1.{code}')
         elif code.startswith('3'):
             # 300xxx是上海股
             candidates.append(f'0.{code}')
@@ -77,6 +80,31 @@ class EastMoneyClient:
             print(f"测试secid失败 {secid}: {e}")
             return False
     
+    def is_market_open_today(self, secid: str) -> bool:
+        """判断今天是否开盘（通过检查是否有今日分时数据）"""
+        try:
+            today = datetime.now().strftime('%Y%m%d')
+            params = {
+                'secid': secid,
+                'fields1': 'f1,f2,f3,f4,f5,f6',
+                'fields2': 'f51,f52,f53,f54,f55,f56',
+                'klt': '1',  # 1分钟K线
+                'fqt': '0',
+                'beg': today,
+                'end': today
+            }
+            url = f"{self.BASE_URL}/api/qt/stock/kline/get"
+            resp = self.session.get(url, params=params, timeout=5)
+            data = resp.json()
+            
+            # 如果有K线数据，说明今天开盘了
+            if data.get('data') and data['data'].get('klines') and len(data['data']['klines']) > 0:
+                return True
+            return False
+        except Exception as e:
+            print(f"检查开盘状态失败: {e}")
+            return False
+    
     def _get_yesterday_close(self, secid: str) -> Optional[float]:
         """获取昨日收盘价"""
         try:
@@ -92,6 +120,54 @@ class EastMoneyClient:
             }
             url = f"{self.BASE_URL}/api/qt/stock/kline/get"
             resp = self.session.get(url, params=params, timeout=5)
+            data = resp.json()
+            
+            if data.get('data') and data['data'].get('klines'):
+                klines = data['data']['klines']
+                if len(klines) >= 2:
+                    # 取倒数第二条（昨天）
+                    yesterday = klines[-2].split(',')
+                    return float(yesterday[2])  # 收盘价
+        except Exception as e:
+            print(f"Error getting yesterday close: {e}")
+        return None
+    
+    def get_latest_close_price(self, code: str) -> Optional[Dict]:
+        """获取最近收盘价（用于非交易时间）"""
+        secid = self._get_secid(code)
+        try:
+            # 获取最近30天的日K线
+            params = {
+                'secid': secid,
+                'fields1': 'f1,f2,f3,f4,f5,f6',
+                'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58',
+                'klt': '101',  # 日K
+                'fqt': '0',
+                'beg': '20250101',
+                'end': datetime.now().strftime('%Y%m%d')
+            }
+            url = f"{self.BASE_URL}/api/qt/stock/kline/get"
+            resp = self.session.get(url, params=params, timeout=10)
+            data = resp.json()
+            
+            if data.get('data') and data['data'].get('klines'):
+                klines = data['data']['klines']
+                # 取最新一条K线（最近交易日）
+                latest = klines[-1].split(',')
+                return {
+                    'code': code,
+                    'name': latest[0] if len(latest) > 0 else '',
+                    'price': float(latest[2]) if len(latest) > 2 else 0,  # 收盘价
+                    'date': latest[0] if len(latest) > 0 else '',  # 日期
+                    'open': float(latest[1]) if len(latest) > 1 else 0,
+                    'high': float(latest[3]) if len(latest) > 3 else 0,
+                    'low': float(latest[4]) if len(latest) > 4 else 0,
+                    'volume': int(latest[5]) if len(latest) > 5 else 0,
+                }
+            return None
+        except Exception as e:
+            print(f"获取收盘价失败 {code}: {e}")
+            return None
             data = resp.json()
             
             if data.get('data') and data['data'].get('klines'):
@@ -184,23 +260,32 @@ class EastMoneyClient:
             data = resp.json()
             
             if not data.get('data'):
-                return None
+                # 没有数据，尝试获取最近收盘价
+                return self._get_close_price_result(code)
             
             d = data['data']
             
-            # 获取昨日收盘价（从K线数据）
+            # 获取价格，如果为0说明今天没开盘
+            price = d.get('f43', 0) / 100 if d.get('f43') else 0
+            
+            # 如果价格无效或为0，说明今天未开盘，获取最近收盘价
+            if price == 0:
+                return self._get_close_price_result(code)
+            
+            # 正常开盘，返回实时数据
             yesterday_close = None
             
             result = {
                 'code': d.get('f57'),
                 'name': d.get('f58'),
-                'price': d.get('f43', 0) / 100 if d.get('f43') else 0,
+                'price': price,
                 'change': 0,
                 'change_pct': 0,
                 'volume': d.get('f47', 0),
                 'amount': d.get('f48', 0),
                 'yesterday_close': None,
-                'time': datetime.now().strftime('%H:%M:%S')
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'market_status': 'open'  # 标记为开盘
             }
             
             # 判断是否是指数（000001, 399xxx等）
@@ -214,7 +299,7 @@ class EastMoneyClient:
                 # 股票：用历史API获取昨日收盘价
                 result['yesterday_close'] = self._get_yesterday_close(secid)
             
-            # 计算涨跌和涨跌幅（用 f43 和 f46 直接计算，避免 f45 字段异常）
+            # 计算涨跌和涨跌幅
             if result['yesterday_close'] and result['yesterday_close'] > 0:
                 result['change'] = round(result['price'] - result['yesterday_close'], 2)
                 result['change_pct'] = round(result['change'] / result['yesterday_close'] * 100, 2)
@@ -223,7 +308,26 @@ class EastMoneyClient:
             
         except Exception as e:
             print(f"Error fetching realtime {code}: {e}")
-            return None
+            # 异常时也尝试获取收盘价
+            return self._get_close_price_result(code)
+    
+    def _get_close_price_result(self, code: str) -> Optional[Dict]:
+        """获取最近收盘价结果（未开盘时使用）"""
+        close_data = self.get_latest_close_price(code)
+        if close_data:
+            return {
+                'code': close_data['code'],
+                'name': close_data.get('name', ''),
+                'price': close_data['price'],
+                'change': 0,
+                'change_pct': 0,
+                'yesterday_close': close_data['price'],
+                'volume': close_data.get('volume', 0),
+                'amount': 0,
+                'time': f"未开市 {close_data.get('date', '')}",
+                'market_status': 'closed'  # 标记为未开盘
+            }
+        return None
     
     def get_latest_minute(self, code: str) -> Optional[Dict]:
         """获取最新一分钟数据"""

@@ -138,6 +138,32 @@ def get_latest_minute(code: str) -> dict:
     
     return dict(row) if row else None
 
+def get_latest_close_data(code: str) -> dict:
+    """获取最近一次的收盘数据（用于非交易时间显示）"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # 按时间倒序获取最近一条数据
+    cursor.execute('''
+        SELECT code, name, date, time, open, close, high, low, volume, amount
+        FROM stock_minute_data
+        WHERE code = ?
+        ORDER BY timestamp DESC LIMIT 1
+    ''', (code,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            'code': row['code'],
+            'name': row['name'],
+            'close': row['close'],
+            'date': row['date'],
+            'time': row['time']
+        }
+    return None
+
 
 if __name__ == "__main__":
     init_db()

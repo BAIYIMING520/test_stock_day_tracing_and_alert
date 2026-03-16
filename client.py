@@ -9,8 +9,106 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import time
 import sys
+import re
+import random
 sys.path.append(str(__file__).rsplit('/', 1)[0])
 from database import save_minute_data
+
+
+class SinaClient:
+    """新浪财经数据客户端"""
+    
+    BASE_URL = "https://hq.sinajs.cn/list="
+    
+    USER_AGENTS = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101',
+    ]
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': random.choice(self.USER_AGENTS),
+            'Referer': 'https://finance.sina.com.cn/',
+        })
+    
+    def _get_code(self, code: str) -> str:
+        """获取新浪格式的股票代码"""
+        code = code.strip()
+        
+        # 指数
+        if code == '000001':
+            return 'sh000001'
+        elif code == '399001':
+            return 'sz399001'
+        elif code == '399006':
+            return 'sz399006'
+        
+        if code.startswith('6'):
+            return f'sh{code}'
+        else:
+            return f'sz{code}'
+    
+    def get_realtime(self, code: str) -> Optional[Dict]:
+        """获取实时行情"""
+        sina_code = self._get_code(code)
+        url = f"{self.BASE_URL}{sina_code}"
+        
+        try:
+            resp = self.session.get(url, timeout=5)
+            if resp.status_code != 200:
+                return None
+            
+            text = resp.text
+            match = re.search(r'="(.+)"', text)
+            if not match:
+                return None
+            
+            parts = match.group(1).split(',')
+            if len(parts) < 32:
+                return None
+            
+            name = parts[0]
+            open_price = float(parts[1]) if parts[1] else 0
+            yesterday_close = float(parts[2]) if parts[2] else 0
+            current_price = float(parts[3]) if parts[3] else 0
+            high = float(parts[4]) if parts[4] else 0
+            low = float(parts[5]) if parts[5] else 0
+            volume = int(parts[8]) if parts[8] else 0
+            amount = float(parts[9]) if parts[9] else 0
+            
+            market_status = 'open' if current_price > 0 else 'closed'
+            
+            change = 0
+            change_pct = 0
+            if yesterday_close and current_price > 0:
+                change = round(current_price - yesterday_close, 2)
+                change_pct = round(change / yesterday_close * 100, 2)
+            
+            update_time = parts[30] if len(parts) > 30 else ''
+            if update_time and len(update_time) >= 8:
+                update_time = update_time[:8]
+            
+            return {
+                'code': code,
+                'name': name,
+                'price': current_price,
+                'change': change,
+                'change_pct': change_pct,
+                'yesterday_close': yesterday_close,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'volume': volume,
+                'amount': amount,
+                'time': update_time,
+                'market_status': market_status
+            }
+        except Exception as e:
+            print(f"新浪API失败 {code}: {e}")
+            return None
+
 
 class EastMoneyClient:
     """东方财富行情数据客户端"""
@@ -276,17 +374,40 @@ def get_all_realtime(codes: List[str]) -> List[Dict]:
     return results
 
 
+class StockClient:
+    """统一客户端：新浪(主) + 东方财富(备)"""
+    
+    def __init__(self):
+        self.sina = SinaClient()
+        self.eastmoney = EastMoneyClient()
+    
+    def get_realtime(self, code: str) -> Optional[Dict]:
+        """获取实时行情，优先用新浪"""
+        # 优先用新浪
+        result = self.sina.get_realtime(code)
+        if result:
+            return result
+        
+        # 新浪失败，尝试东方财富
+        result = self.eastmoney.get_realtime(code)
+        if result:
+            return result
+        
+        return None
+    
+    def get_kline(self, code: str, period: int = 1,
+                  start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """获取K线数据"""
+        return self.eastmoney.get_kline(code, period, start_date, end_date)
+
+
 if __name__ == "__main__":
-    client = EastMoneyClient()
+    client = StockClient()
     
-    # 测试
-    print("=== 测试获取上证指数 ===")
-    df = client.get_kline('000001', period=1)
-    if not df.empty:
-        print(f"获取到 {len(df)} 条数据")
-        print(df.tail(3))
-    
-    print("\n=== 测试实时行情 ===")
+    print("=== 测试实时行情 ===")
     rt = client.get_realtime('000001')
     if rt:
         print(f"上证指数: {rt}")
+    
+    rt = client.get_realtime('600519')
+    print(f"贵州茅台: {rt}")

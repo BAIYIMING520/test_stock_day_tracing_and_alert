@@ -14,7 +14,7 @@ import sys
 sys.path.append(os.path.dirname(__file__))
 
 from config import load_config, save_config, add_stock, remove_stock, get_stocks, is_trading_time
-from client import EastMoneyClient, get_all_realtime
+from client import StockClient, get_all_realtime
 from database import init_db, get_minute_data, get_latest_close_data
 
 app = Flask(__name__)
@@ -988,15 +988,15 @@ def api_realtime():
     if not stocks:
         return jsonify([])
     
-    client = EastMoneyClient()
+    client = StockClient()
     results = []
     
     for code in stocks:
         data = client.get_realtime(code)
         if data:
             results.append(data)
-            # 同时获取并保存分时数据
-            client.fetch_and_save(code)
+            # 同时获取并保存分时数据 (暂时禁用)
+            # client.fetch_and_save(code)
         else:
             # 非交易时间（API获取失败），从数据库获取最近收盘数据
             latest = get_latest_close_data(code)

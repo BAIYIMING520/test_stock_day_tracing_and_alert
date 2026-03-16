@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A股数据获取模块 - 东方财富API + IP池 + UA轮换 + Referer伪装
+A股数据获取模块 - 东方财富API + 新浪财经API + IP池 + UA轮换 + Referer伪装
 """
 
 import requests
@@ -12,40 +12,27 @@ import sys
 import re
 import random
 import threading
+import os
 sys.path.append(str(__file__).rsplit('/', 1)[0])
 from database import save_minute_data
 
 
 # 指数代码映射
 INDEX_CODES = {
-    '000001': '0.000001',  # 上证指数
-    '399001': '1.399001',  # 深证成指
-    '399006': '1.399006',  # 创业板指
-    '000300': '0.000300',  # 沪深300
+    '000001': 'sh000001',  # 上证指数
+    '399001': 'sz399001',  # 深证成指
+    '399006': 'sz399006',  # 创业板指
+    '000300': 'sh000300',  # 沪深300
 }
 
 
 class ProxyPool:
     """代理IP池管理器"""
     
-    # 免费代理API（备选）
-    FREE_PROXY_APIS = [
-        'http://ip.jiangxianli.com/api/proxy_ips',
-        'https://ip.16yun.cn:8000/api/proxy_ips',
-    ]
-    
     def __init__(self):
-        self.proxies = []
-        self.current_index = 0
-        self.last_refresh = 0
-        self.refresh_interval = 300  # 5分钟刷新一次
-        self.lock = threading.Lock()
-        
-        # 用户配置的固定代理（优先使用）
         self.fixed_proxies = []
         
         # 从环境变量读取代理列表
-        import os
         proxy_str = os.environ.get('HTTP_PROXIES', '')
         if proxy_str:
             self.fixed_proxies = [p.strip() for p in proxy_str.split(',') if p.strip()]
@@ -53,43 +40,116 @@ class ProxyPool:
     
     def get_proxy(self) -> Optional[dict]:
         """获取一个可用代理"""
-        with self.lock:
-            # 优先使用固定代理
-            if self.fixed_proxies:
-                proxy = random.choice(self.fixed_proxies)
-                return {
-                    'http': f'http://{proxy}',
-                    'https': f'http://{proxy}'
-                }
-            
-            # 尝试获取免费代理
-            if time.time() - self.last_refresh > self.refresh_interval:
-                self._refresh_free_proxies()
-            
-            if self.proxies:
-                proxy = self.proxies[self.current_index]
-                self.current_index = (self.current_index + 1) % len(self.proxies)
-                return proxy
-            
-            return None
-    
-    def _refresh_free_proxies(self):
-        """从免费API获取代理"""
-        self.proxies = []
-        # 这里可以添加从免费代理网站获取的逻辑
-        # 由于免费代理不稳定，默认返回空
-        self.last_refresh = time.time()
-        print("免费代理池为空，请配置固定代理")
-    
-    def add_proxy(self, proxy: str):
-        """添加代理到池中"""
-        with self.lock:
-            if proxy not in self.fixed_proxies:
-                self.fixed_proxies.append(proxy)
+        if self.fixed_proxies:
+            proxy = random.choice(self.fixed_proxies)
+            return {
+                'http': f'http://{proxy}',
+                'https': f'http://{proxy}'
+            }
+        return None
 
 
 # 全局代理池
 proxy_pool = ProxyPool()
+
+
+class SinaClient:
+    """新浪财经数据客户端"""
+    
+    BASE_URL = "https://hq.sinajs.cn/list="
+    
+    USER_AGENTS = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101',
+    ]
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': random.choice(self.USER_AGENTS),
+            'Referer': 'https://finance.sina.com.cn/',
+        })
+    
+    def _get_code(self, code: str) -> str:
+        """获取新浪格式的股票代码"""
+        code = code.strip()
+        
+        # 指数
+        if code == '000001':
+            return 'sh000001'
+        elif code == '399001':
+            return 'sz399001'
+        elif code == '399006':
+            return 'sz399006'
+        
+        if code.startswith('6'):
+            return f'sh{code}'
+        else:
+            return f'sz{code}'
+    
+    def get_realtime(self, code: str) -> Optional[Dict]:
+        """获取实时行情"""
+        sina_code = self._get_code(code)
+        url = f"{self.BASE_URL}{sina_code}"
+        
+        try:
+            resp = self.session.get(url, timeout=5)
+            if resp.status_code != 200:
+                return None
+            
+            text = resp.text
+            # var hq_str_sh600519="贵州茅台,1420.000,..."
+            match = re.search(r'="(.+)"', text)
+            if not match:
+                return None
+            
+            parts = match.group(1).split(',')
+            if len(parts) < 32:
+                return None
+            
+            name = parts[0]
+            open_price = float(parts[1]) if parts[1] else 0
+            yesterday_close = float(parts[2]) if parts[2] else 0
+            current_price = float(parts[3]) if parts[3] else 0
+            high = float(parts[4]) if parts[4] else 0
+            low = float(parts[5]) if parts[5] else 0
+            volume = int(parts[8]) if parts[8] else 0
+            amount = float(parts[9]) if parts[9] else 0
+            
+            # 判断是否开盘
+            market_status = 'open' if current_price > 0 else 'closed'
+            
+            # 涨跌
+            change = 0
+            change_pct = 0
+            if yesterday_close and current_price > 0:
+                change = round(current_price - yesterday_close, 2)
+                change_pct = round(change / yesterday_close * 100, 2)
+            
+            # 时间
+            update_time = parts[30] if len(parts) > 30 else ''
+            if update_time and len(update_time) >= 8:
+                update_time = update_time[:8]
+            
+            return {
+                'code': code,
+                'name': name,
+                'price': current_price,
+                'change': change,
+                'change_pct': change_pct,
+                'yesterday_close': yesterday_close,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'volume': volume,
+                'amount': amount,
+                'time': update_time,
+                'market_status': market_status
+            }
+        except Exception as e:
+            print(f"新浪API失败 {code}: {e}")
+            return None
 
 
 class EastMoneyClient:
@@ -97,25 +157,16 @@ class EastMoneyClient:
     
     BASE_URL = "https://push2his.eastmoney.com"
     
-    # 轮换的User-Agent
     USER_AGENTS = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
     ]
     
-    # 轮换的Referer
     REFERERS = [
         'https://quote.eastmoney.com/',
         'https://quote.eastmoney.com/sh600519.html',
-        'https://quote.eastmoney.com/sz000001.html',
         'https://www.eastmoney.com/',
-        'https://search.eastmoney.com/',
     ]
     
     def __init__(self):
@@ -125,129 +176,74 @@ class EastMoneyClient:
         self.max_fails = 3
     
     def _update_headers(self):
-        """随机更新Headers"""
         self.session.headers.update({
             'User-Agent': random.choice(self.USER_AGENTS),
             'Accept': '*/*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
             'Referer': random.choice(self.REFERERS),
         })
     
     def _get_secid(self, code: str) -> str:
-        """获取市场代码"""
-        code = code.strip()
-        
-        # 指数处理
-        if code in INDEX_CODES:
-            return INDEX_CODES[code]
-        
         if code.startswith('6'):
             return f'0.{code}'
         elif code.startswith(('0', '2', '3')):
             return f'1.{code}'
         return f'0.{code}'
     
-    def _make_request(self, url: str, params: dict = None, timeout: int = 10) -> Optional[requests.Response]:
-        """发起请求，支持代理"""
-        # 尝试多次
-        for attempt in range(3):
-            # 每次请求换UA
-            self._update_headers()
-            
-            # 获取代理
-            proxy = proxy_pool.get_proxy()
-            
-            try:
-                if proxy:
-                    resp = self.session.get(url, params=params, timeout=timeout, proxies=proxy)
-                else:
-                    resp = self.session.get(url, params=params, timeout=timeout)
-                
-                if resp.status_code == 200:
-                    self.fail_count = 0
-                    return resp
-                elif resp.status_code == 403:
-                    print(f"IP被封 (403), 尝试切换代理...")
-                    self.fail_count += 1
-                else:
-                    print(f"请求失败: {resp.status_code}")
-                    
-            except requests.exceptions.ProxyError as e:
-                print(f"代理错误: {e}")
-                self.fail_count += 1
-            except requests.exceptions.RequestException as e:
-                print(f"请求异常: {e}")
-            
-            # 失败后等待并重试
-            if self.fail_count >= self.max_fails:
-                break
-            time.sleep(1 + random.random())
-        
-        return None
-    
     def get_realtime(self, code: str) -> Optional[Dict]:
         """获取实时行情"""
         secid = self._get_secid(code)
         params = {
             'secid': secid,
-            'fields': 'f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f59,f60,f116,f117,f118,f119,f120,f121,f122,f124'
+            'fields': 'f43,f44,f45,f46,f47,f48,f50,f57,f58,f59,f60'
         }
         
         url = f"{self.BASE_URL}/api/qt/stock/get"
         
-        # 请求间隔
         time.sleep(random.uniform(0.3, 0.8))
         
-        resp = self._make_request(url, params=params)
-        if not resp:
-            print(f"获取实时行情失败: {code}")
-            return None
+        proxy = proxy_pool.get_proxy()
         
-        try:
-            data = resp.json()
-        except:
-            print(f"解析JSON失败: {code}")
-            return None
+        for attempt in range(3):
+            self._update_headers()
+            try:
+                if proxy:
+                    resp = self.session.get(url, params=params, timeout=10, proxies=proxy)
+                else:
+                    resp = self.session.get(url, params=params, timeout=10)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get('data'):
+                        d = data['data']
+                        price = d.get('f43', 0) / 100 if d.get('f43') else 0
+                        if price == 0:
+                            return None
+                        
+                        yesterday_close = d.get('f46', 0) / 100 if d.get('f46') else None
+                        change = 0
+                        change_pct = 0
+                        if yesterday_close:
+                            change = round(price - yesterday_close, 2)
+                            change_pct = round(change / yesterday_close * 100, 2)
+                        
+                        return {
+                            'code': d.get('f57'),
+                            'name': d.get('f58'),
+                            'price': price,
+                            'change': change,
+                            'change_pct': change_pct,
+                            'yesterday_close': yesterday_close,
+                            'volume': d.get('f47', 0),
+                            'amount': d.get('f48', 0),
+                            'time': datetime.now().strftime('%H:%M:%S'),
+                            'market_status': 'open'
+                        }
+            except Exception as e:
+                print(f"东方财富API异常: {e}")
+            
+            time.sleep(1)
         
-        if not data.get('data'):
-            return None
-        
-        d = data['data']
-        price = d.get('f43', 0) / 100 if d.get('f43') else 0
-        
-        if price == 0:
-            return None
-        
-        # 判断是否是指数
-        is_index = code in INDEX_CODES
-        
-        if is_index:
-            yesterday_close = d.get('f46', 0) / 100 if d.get('f46') else None
-        else:
-            yesterday_close = d.get('f169', 0) / 100 if d.get('f169') else None
-            if not yesterday_close:
-                yesterday_close = d.get('f46', 0) / 100 if d.get('f46') else None
-        
-        change = 0
-        change_pct = 0
-        if yesterday_close:
-            change = round(price - yesterday_close, 2)
-            change_pct = round(change / yesterday_close * 100, 2)
-        
-        return {
-            'code': d.get('f57'),
-            'name': d.get('f58'),
-            'price': price,
-            'change': change,
-            'change_pct': change_pct,
-            'yesterday_close': yesterday_close,
-            'volume': d.get('f47', 0),
-            'amount': d.get('f48', 0),
-            'time': datetime.now().strftime('%H:%M:%S'),
-            'market_status': 'open'
-        }
+        return None
     
     def get_kline(self, code: str, period: int = 1,
                   start_date: str = None, end_date: str = None) -> pd.DataFrame:
@@ -262,7 +258,7 @@ class EastMoneyClient:
         params = {
             'secid': secid,
             'fields1': 'f1,f2,f3,f4,f5,f6',
-            'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+            'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58',
             'klt': str(period),
             'fqt': '0',
             'beg': start_date,
@@ -273,76 +269,81 @@ class EastMoneyClient:
         
         time.sleep(random.uniform(0.3, 0.8))
         
-        resp = self._make_request(url, params=params)
-        if not resp:
-            return pd.DataFrame()
-        
         try:
+            proxy = proxy_pool.get_proxy()
+            if proxy:
+                resp = self.session.get(url, params=params, timeout=10, proxies=proxy)
+            else:
+                resp = self.session.get(url, params=params, timeout=10)
+            
             data = resp.json()
-        except:
-            return pd.DataFrame()
+            if data.get('data') and data['data'].get('klines'):
+                klines = data['data']['klines']
+                records = []
+                for kline in klines:
+                    parts = kline.split(',')
+                    records.append({
+                        '时间': parts[0],
+                        '开盘': float(parts[1]),
+                        '收盘': float(parts[2]),
+                        '最高': float(parts[3]),
+                        '最低': float(parts[4]),
+                        '成交量': int(parts[5]),
+                        '成交额': float(parts[6]),
+                    })
+                return pd.DataFrame(records)
+        except Exception as e:
+            print(f"获取K线失败: {e}")
         
-        if data.get('data') is None or not data['data'].get('klines'):
-            return pd.DataFrame()
-        
-        klines = data['data']['klines']
-        records = []
-        for kline in klines:
-            parts = kline.split(',')
-            records.append({
-                '时间': parts[0],
-                '开盘': float(parts[1]),
-                '收盘': float(parts[2]),
-                '最高': float(parts[3]),
-                '最低': float(parts[4]),
-                '成交量': int(parts[5]),
-                '成交额': float(parts[6]),
-            })
-        
-        return pd.DataFrame(records)
+        return pd.DataFrame()
+
+
+class StockClient:
+    """统一客户端：新浪(主) + 东方财富(备)"""
     
-    def fetch_and_save(self, code: str) -> bool:
-        """获取并保存分时数据"""
-        df = self.get_kline(code, period=1)
-        if df.empty:
-            return False
+    def __init__(self):
+        self.sina = SinaClient()
+        self.eastmoney = EastMoneyClient()
+    
+    def get_realtime(self, code: str) -> Optional[Dict]:
+        """获取实时行情，优先用新浪"""
+        # 优先用新浪
+        result = self.sina.get_realtime(code)
+        if result:
+            return result
         
-        rt = self.get_realtime(code)
-        name = rt.get('name', '') if rt else ''
+        # 新浪失败，尝试东方财富
+        result = self.eastmoney.get_realtime(code)
+        if result:
+            return result
         
-        records = []
-        for _, row in df.iterrows():
-            records.append({
-                'time': row['时间'],
-                'open': row['开盘'],
-                'close': row['收盘'],
-                'high': row['最高'],
-                'low': row['最低'],
-                'volume': row['成交量'],
-                'amount': row['成交额']
-            })
-        
-        save_minute_data(code, name, records)
-        return True
+        return None
+    
+    def get_kline(self, code: str, period: int = 1,
+                  start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """获取K线数据"""
+        return self.eastmoney.get_kline(code, period, start_date, end_date)
 
 
+# 兼容旧接口
 def get_all_realtime(codes: List[str]) -> List[Dict]:
     """批量获取实时行情"""
-    client = EastMoneyClient()
+    client = StockClient()
     results = []
     
     for code in codes:
         data = client.get_realtime(code)
         if data:
             results.append(data)
+        time.sleep(0.1)
     
     return results
 
 
 if __name__ == "__main__":
-    client = EastMoneyClient()
+    client = StockClient()
     
-    print("=== 测试东方财富API ===")
+    print("=== 测试数据源 ===")
     
     # 测试上证指数
     rt = client.get_realtime('000001')

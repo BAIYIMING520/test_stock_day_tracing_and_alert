@@ -11,6 +11,11 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
+    # 优先使用构建好的前端
+    static_index = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'index.html')
+    if os.path.exists(static_index):
+        with open(static_index, 'r', encoding='utf-8') as f:
+            return f.read()
     return '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>A股分时监控</title><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#1a1a2e;color:#eee;margin:0;padding:20px}.stock-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:15px}.stock-card{background:#16213e;border-radius:12px;padding:20px}.price-up{color:#ff4757}.price-down{color:#00ff88}</style></head>
 <body><h1>🦞 A股分时监控</h1><div class="stock-grid" id="grid"></div>

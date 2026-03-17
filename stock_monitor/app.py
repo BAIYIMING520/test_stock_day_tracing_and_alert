@@ -952,6 +952,11 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def index():
+    # 优先使用构建好的前端
+    static_index = os.path.join(os.path.dirname(__file__), 'static', 'index.html')
+    if os.path.exists(static_index):
+        with open(static_index, 'r', encoding='utf-8') as f:
+            return f.read()
     return render_template_string(HTML_TEMPLATE, is_trading=is_trading_time())
 
 @app.route('/api/stocks', methods=['GET'])

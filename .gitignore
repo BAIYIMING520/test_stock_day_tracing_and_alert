@@ -33,8 +33,9 @@ Thumbs.db
 .openclaw/logs/
 *.sock
 
-# Skills (reinstallable)
-skills/
+# External projects (do not commit)
+daily_stock_analysis/
+stock_repo/
 
 ## Python
 __pycache__/

@@ -1,0 +1,6 @@
+*.log
+__pycache__/
+*.pyc
+config.json
+stock_data.db
+users.json

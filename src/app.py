@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A股分时监控服务 - DDD 架构"""
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -8,6 +8,16 @@ from src.config import get_stocks, add_stock, remove_stock, load_data_fetcher_co
 from src.data_driven import get_stock_data_driven
 
 app = Flask(__name__)
+
+# 提供静态文件
+@app.route('/assets/<path:filename>')
+def serve_static(filename):
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'assets')
+    file_path = os.path.join(static_dir, filename)
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as f:
+            return f.read(), 200, {'Content-Type': 'text/css' if filename.endswith('.css') else 'application/javascript'}
+    return 'Not Found', 404
 
 @app.route('/')
 def index():
@@ -47,6 +57,35 @@ def api_realtime():
 def api_minute(code):
     driven = get_stock_data_driven()
     return jsonify([m.to_dict() for m in driven.get_minute_data(code)])
+
+# 登录 API
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json() or {}
+    username = data.get('username', '')
+    password = data.get('password', '')
+    if username == 'admin' and password == 'admin':
+        return jsonify({'success': True, 'token': 'demo-token-123'})
+    return jsonify({'success': False, 'error': '用户名或密码错误'})
+
+# 登出 API
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    return jsonify({'success': True})
+
+# 告警配置 API
+@app.route('/api/alerts', methods=['GET'])
+def api_get_alerts():
+    return jsonify({'refresh_interval': 60})
+
+@app.route('/api/alerts', methods=['POST'])
+def api_save_alerts():
+    return jsonify({'success': True})
+
+# 告警历史 API
+@app.route('/api/alerts/history', methods=['GET'])
+def api_get_alert_history():
+    return jsonify([])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)

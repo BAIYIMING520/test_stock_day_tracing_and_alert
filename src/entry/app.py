@@ -17,7 +17,7 @@ import secrets
 import jwt
 from functools import wraps
 
-BASE_DIR = Path(__file__).parent.parent
+BASE_DIR = Path(__file__).parent.parent.parent  # stock_monitor/
 from src.services.config import load_config, save_config, add_stock, remove_stock, get_stocks, is_trading_time
 from src.infrastructure.client import StockClient, get_all_realtime
 from src.infrastructure.database import init_db, get_minute_data, get_latest_close_data

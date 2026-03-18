@@ -1,0 +1,60 @@
+{
+  "stocks": [
+    "000001",
+    "600519"
+  ],
+  "interval": 60,
+  "enabled": true,
+  "refresh_interval": 60,
+  "alerts": {
+    "price_change": {
+      "enabled": true,
+      "threshold": 5.0
+    },
+    "rapid_change": {
+      "enabled": true,
+      "minutes": 30,
+      "threshold": 3.0
+    },
+    "volume_surge": {
+      "enabled": true,
+      "threshold": 50.0
+    },
+    "trend_fit": {
+      "enabled": true,
+      "lookback": 60
+    },
+    "breakout": {
+      "enabled": false,
+      "type": "high",
+      "days": 20
+    },
+    "open_close_push": {
+      "enabled": true,
+      "push_open": true,
+      "push_close": true
+    }
+  },
+  "quote0": {
+    "enabled": true,
+    "api_key": "dot_app_lfiIjUQEFgKTUEkNbjpywfcbDePxRaBkYBCWyhLeCBsCnJBFjtPHSgVRkEWzFgfP",
+    "device_id": "9C9E6E3B81E8"
+  },
+  "email": {
+    "enabled": false,
+    "smtp_host": "smtp.qq.com",
+    "smtp_port": 587,
+    "use_tls": true,
+    "username": "your_email@qq.com",
+    "password": "your_auth_code",
+    "to_addrs": [
+      "recipient@example.com"
+    ],
+    "enabled_types": [
+      "price_change",
+      "rapid_change",
+      "volume_surge",
+      "trend_fit"
+    ]
+  }
+}

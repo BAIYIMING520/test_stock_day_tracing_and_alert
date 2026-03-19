@@ -1,2 +1,4 @@
-# Entry Layer - 入口层
-# Flask 主应用、启动服务器
+"""Stock Monitor Entry Package"""
+from .app import app, create_app
+
+__all__ = ['app', 'create_app']
